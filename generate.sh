@@ -251,7 +251,7 @@ if [ ! -f eckey-ecdsa.crt.der ]; then
 		-key eckey.pem -out myreq-eckey.pem \
 		-subj '/CN=ecdsa-ca-signed-ec-key' \
 		-reqexts v3_req
-	openssl ca -config ecdsa-ca/ecdsaca.conf \
+	openssl ca -config ecdsa-ca/ecdsaca.conf -md sha256 \
 		-out eckey-ecdsa.pem -infiles myreq-eckey.pem
 	openssl x509 -in eckey-ecdsa.pem -outform der -out eckey-ecdsa.crt.der
 	openssl verify -verbose -CAfile ecdsa-ca/ca.crt eckey-ecdsa.pem
@@ -263,7 +263,7 @@ if [ ! -f eckey-rsa.crt.der ]; then
 		-key eckey.pem -out myreq-rsakey.pem \
 		-subj '/CN=rsa-ca-signed-ec-key' \
 		-reqexts v3_req
-	openssl ca -config rsa-ca/rsaca.conf \
+	openssl ca -config rsa-ca/rsaca.conf -md sha256 \
 		-out eckey-rsa.pem -infiles myreq-rsakey.pem
 	openssl x509 -in eckey-rsa.pem -outform der -out eckey-rsa.crt.der
 	openssl verify -verbose -CAfile rsa-ca/ca.crt eckey-rsa.pem
@@ -281,7 +281,7 @@ if [ ! -f rsakey-ecdsa.crt.der ]; then
 		-key rsakey.pem -out myreq-eckey.pem \
 		-subj '/CN=ecdsa-ca-signed-rsa-key' \
 		-reqexts v3_req
-	openssl ca -config ecdsa-ca/ecdsaca.conf \
+	openssl ca -config ecdsa-ca/ecdsaca.conf -md sha256 \
 		-out rsakey-ecdsa.pem -infiles myreq-eckey.pem
 	openssl x509 -in rsakey-ecdsa.pem -outform der -out rsakey-ecdsa.crt.der
 	openssl verify -verbose -CAfile ecdsa-ca/ca.crt rsakey-ecdsa.pem
@@ -293,7 +293,7 @@ if [ ! -f rsakey-rsa.crt.der ]; then
 		-key rsakey.pem -out myreq-rsakey.pem \
 		-subj '/CN=rsa-ca-signed-rsa-key' \
 		-reqexts v3_req
-	openssl ca -config rsa-ca/rsaca.conf \
+	openssl ca -config rsa-ca/rsaca.conf -md sha256 \
 		-out rsakey-rsa.pem -infiles myreq-rsakey.pem
 	openssl x509 -in rsakey-rsa.pem -outform der -out rsakey-rsa.crt.der
 	openssl verify -verbose -CAfile rsa-ca/ca.crt rsakey-rsa.pem
@@ -316,4 +316,28 @@ if [ ! -f rsakey-mldsa.crt.der ]; then
 		-out rsakey-mldsa.pem -infiles myreq-rsakey.pem
 	openssl x509 -in rsakey-mldsa.pem -outform der -out rsakey-mldsa.crt.der
 	openssl verify -verbose -CAfile mldsa-ca/ca.crt rsakey-mldsa.pem
+fi
+
+if [ ! -f eckey-mldsa.crt.der ]; then
+	echo "Using MLDSA CA to sign EC key"
+	openssl req -new -config mldsa-ca/mldsaca.conf \
+		-key eckey.pem -out myreq-eckey.pem \
+		-subj '/CN=mldsa-ca-signed-ec-key' \
+		-reqexts v3_req
+	openssl ca -config mldsa-ca/mldsaca.conf \
+		-out eckey-mldsa.pem -infiles myreq-eckey.pem
+	openssl x509 -in eckey-mldsa.pem -outform der -out eckey-mldsa.crt.der
+	openssl verify -verbose -CAfile mldsa-ca/ca.crt eckey-mldsa.pem
+fi
+
+if [ ! -f mldsakey-mldsa.crt.der ]; then
+	echo "Using MLDSA CA to sign MLDSA key"
+	openssl req -new -config mldsa-ca/mldsaca.conf \
+		-key mldsakey.pem -out myreq-mldsakey.pem \
+		-subj '/CN=mldsa-ca-signed-mldsa-key' \
+		-reqexts v3_req
+	openssl ca -config mldsa-ca/mldsaca.conf \
+		-out mldsakey-mldsa.pem -infiles myreq-mldsakey.pem
+	openssl x509 -in mldsakey-mldsa.pem -outform der -out mldsakey-mldsa.crt.der
+	openssl verify -verbose -CAfile mldsa-ca/ca.crt mldsakey-mldsa.pem
 fi
