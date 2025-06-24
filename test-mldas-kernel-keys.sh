@@ -116,8 +116,8 @@ main() {
           exit 1
         else
           case "$rc" in
-          0) printf "Good: key: %10s keyid: %-10s" "$key" "$id";;
-          *) printf "Good: key: %10s keyid: %-10s -- bad certificate was rejected\n" "$key" "$id";;
+          0) printf "Good: key: %7s  keyid: %-10s" "$key" "$id";;
+          *) printf "Good: key: %7s  keyid: %-10s -- bad certificate was rejected\n" "$key" "$id";;
           esac
         fi
         if [ -n "${id}" ]; then
@@ -126,11 +126,12 @@ main() {
           echo "test" >> raw-in
           openssl dgst -shake256 -xoflen=32 -binary raw-in > raw-in.hash
           openssl pkeyutl -sign -inkey key.pem -in raw-in.hash -out sig.bin
-          if ! keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin "hash=${hash}" enc=raw; then
+          if ! keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin; then
             printf "\n\nSignature verification failed"
             exit 1
           fi
           sigsz=$(stat -c%s sig.bin)
+          hashsz=$(stat -c%s raw-in.hash)
 
           # Try verification with bad signatures
           for _ in $(seq 0 19); do
@@ -142,15 +143,34 @@ main() {
             byte2=$(printf "%02x" $((RANDOM % 255)))
             printf "\x${byte1}\x${byte2}" |
               dd of=sig.bin.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
-            if keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin.bad "hash=${hash}" enc=x962 &>/dev/null; then
+            if keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin.bad &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
                      -verify \
                      -in raw-in.hash \
                      -sigfile sig.bin.bad \
-                     -pkeyopt "digest:${hash}" \
                      -inkey key.pem &>/dev/null; then
                 printf "\n\nBAD: Kernel driver reported successful verification of bad signature"
+                exit 1
+              fi
+            fi
+
+
+            # test with good signature and bad hash
+            cp raw-in.hash raw-in.hash.bad
+            off=$((RANDOM % (hashsz-1)))
+
+            # Generate a bad hash by injecting 2 random bytes into the file at some offset
+            printf "\x${byte1}\x${byte2}" |
+              dd of=raw-in.hash.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
+            if keyctl pkey_verify "${id}" 0 raw-in.hash.bad sig.bin &>/dev/null; then
+              # Accidentally verified - Must also pass with openssl
+              if ! openssl pkeyutl \
+                     -verify \
+                     -in raw-in.hash.bad \
+                     -sigfile sig.bin \
+                     -inkey key.pem &>/dev/null; then
+                printf "\n\nBAD: Kernel driver reported successful verification of bad signature with bad hash"
                 exit 1
               fi
             fi
@@ -159,7 +179,7 @@ main() {
 
           # check for fixes introduced by
           # https://lore.kernel.org/linux-crypto/cover.1735236227.git.lukas@wunner.de/T/#mf161d128e8f7a8498c64e66d69dd666a1385c382
-          if ! keyctl pkey_query "${id}" 0 enc=raw "hash=${hash}" > pkey_query.out; then
+          if ! keyctl pkey_query "${id}" 0 > pkey_query.out; then
             printf "\nWarning: pkey_query failed on key\n"
           else
             local expkeylen=0
