@@ -124,10 +124,13 @@ main() {
           local sigsz off byte1 byte2
 
           echo "test" >> raw-in
+          # pre-hash
           openssl dgst -shake256 -xoflen=32 -binary raw-in > raw-in.hash
+          # Sign the pre-hash; OpenSSL must be using domain separator 0x00, 0x00 (!)
           openssl pkeyutl -sign -inkey key.pem -in raw-in.hash -out sig.bin
+          # This also works because the kernel uses domain separator 0x00, 0x00
           if ! keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin; then
-            printf "\n\nSignature verification failed"
+            printf "\n\nSignature verification failed\n"
             exit 1
           fi
           sigsz=$(stat -c%s sig.bin)
