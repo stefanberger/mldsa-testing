@@ -129,7 +129,7 @@ main() {
           # Sign the pre-hash; OpenSSL must be using domain separator 0x00, 0x00 (!)
           openssl pkeyutl -sign -inkey key.pem -in raw-in.hash -out sig.bin
           # This also works because the kernel uses domain separator 0x00, 0x00
-          if ! keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin; then
+          if ! keyctl pkey_verify "${id}" 0 /dev/null sig.bin msg=$(base64 -w0 raw-in.hash); then
             printf "\n\nSignature verification failed\n"
             exit 1
           fi
@@ -146,7 +146,7 @@ main() {
             byte2=$(printf "%02x" $((RANDOM % 255)))
             printf "\x${byte1}\x${byte2}" |
               dd of=sig.bin.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
-            if keyctl pkey_verify "${id}" 0 raw-in.hash sig.bin.bad &>/dev/null; then
+            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin.bad msg=$(base64 -w0 raw-in.hash) &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
                      -verify \
@@ -166,7 +166,7 @@ main() {
             # Generate a bad hash by injecting 2 random bytes into the file at some offset
             printf "\x${byte1}\x${byte2}" |
               dd of=raw-in.hash.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
-            if keyctl pkey_verify "${id}" 0 raw-in.hash.bad sig.bin &>/dev/null; then
+            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin msg=$(base64 -w0 raw-in.hash.bad) &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
                      -verify \
