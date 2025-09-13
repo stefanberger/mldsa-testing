@@ -9,7 +9,7 @@ inject_fault_cert_key() {
   local certfilein="$1"
   local certfileout="$2"
 
-  local line offset hl skip
+  local line offset keysize keyoffset byte newbyte byte_to_write
 
   cp -f "${certfilein}" "${certfileout}"
 
@@ -18,18 +18,32 @@ inject_fault_cert_key() {
         head -n1)
   offset=$(echo "${line}" | cut -d":" -f1)
 
-  # header length always assumed to be '2'
-  hl=2
-  # go a bit 'into' the key parameters
-  skip=4
-  # inject 3 bytes of bad key data -- it's unlikely this is valid data
-  #dd if=${certfile} bs=1 count=3 skip=$((offset+hl+skip)) status=none | od -tx1
-  #sha1sum $certfile
-  # inject 3 bytes of bad key data -- it's unlikely this is the same as the original
-  printf '\x00\x00\x00' | \
-    dd of="${certfileout}" bs=1 count=3 seek=$((offset+hl+skip)) conv=notrunc status=none
-  #dd if=${certfile} bs=1 count=3 skip=$((offset+hl+skip)) status=none | od -tx1
-  #sha1sum $certfile
+  #dd if="${certfilein}" bs=1 count=2 skip=$((offset+2)) status=none | od -An -tx1
+  # the size of the key can be found in 2 bytes at offset+2
+  keysize="0x$(dd if="${certfilein}" bs=1 count=2 skip=$((offset+2)) status=none |
+               od -An -tx1 |
+               cut -d" " -f2- |
+               tr -d ' ')"
+
+  # offset within key
+  keyoffset=$((RANDOM % keysize))
+  # current byte at this offset
+  byte="0x$(dd if="${certfilein}" bs=1 count=1 skip=$((offset+2+keyoffset)) status=none |
+            od -An -tx1 |
+            cut -d" " -f2- |
+            tr -d ' ')"
+  #echo "keysize=$((keysize)) keyoffset=$((keyoffset)) byte=$((byte))"
+  # flip a single random bit in this byte
+  newbyte=$((byte ^ (1 << (RANDOM & 7))))
+  byte_to_write="\x$(printf "%02x" ${newbyte})"
+  #echo "byte=$((byte)) newbyte=$((newbyte)) ${byte_to_write}"
+  #printf "${byte_to_write}" | od -An -tx1
+
+  # write this byte back into the signature
+  echo -en "${byte_to_write}" | \
+    dd of="${certfileout}" bs=1 count=1 seek=$((offset+2+keyoffset)) conv=notrunc status=none
+  #dd if=${certfile} bs=1 count=1 skip=$((offset+2+sigoffset)) status=none | od -An -tx1
+  #sha1sum $certfilein $certfileout
 }
 
 # Inject a fault into the certificate's signature
@@ -37,7 +51,7 @@ inject_fault_cert_signature() {
   local certfilein="$1"
   local certfileout="$2"
 
-  local line offset hl skip
+  local line offset sigsize sigoffset byte newbyte byte_to_write
 
   cp -f "${certfilein}" "${certfileout}"
 
@@ -46,23 +60,35 @@ inject_fault_cert_signature() {
         tail -n1)
   offset=$(echo "${line}" | cut -d":" -f1)
 
-  # At the offset it looks like this from prime256v1: 03 47 00 30 44 02 20 14
-  # We want to get to the '14'; skip over 5 bytes of header
-  hl=5
-  # go a bit 'into' the key parameters to '14'
-  skip=2
-  # inject 3 bytes of bad key data -- it's unlikely this is valid data
-  #dd if=${certfile} bs=1 count=3 skip=$((offset+hl+skip)) status=none | od -tx1
-  #sha1sum $certfile
-  # inject 3 bytes of bad key data -- it's unlikely this is the same as the original
-  printf '\x01\x23\x45' | \
-    dd of="${certfileout}" bs=1 count=3 seek=$((offset+hl+skip)) conv=notrunc status=none
-  #dd if=${certfile} bs=1 count=3 skip=$((offset+hl+skip)) status=none | od -tx1
-  #sha1sum $certfile
+  #set -x
+  # the size of the signature can be found in 2 bytes at offset+2
+  sigsize="0x$(dd if="${certfilein}" bs=1 count=2 skip=$((offset+2)) status=none |
+               od -An -tx1 |
+               cut -d" " -f2- |
+               tr -d ' ')"
+  # offset within signature
+  sigoffset=$((RANDOM % sigsize))
+  # current byte at this offset
+  byte="0x$(dd if="${certfilein}" bs=1 count=1 skip=$((offset+2+sigoffset)) status=none |
+            od -An -tx1 |
+            cut -d" " -f2- |
+            tr -d ' ')"
+  #echo "sigsize=$((sigsize)) sigoffset=$((sigoffset)) byte=$((byte))"
+  # flip a single random bit in this byte
+  newbyte=$((byte ^ (1 << (RANDOM & 7))))
+  byte_to_write="\x$(printf "%02x" ${newbyte})"
+  #echo "byte=$((byte)) newbyte=$((newbyte)) ${byte_to_write}"
+  #printf "${byte_to_write}" | od -An -tx1
+
+  # write this byte back into the signature
+  echo -en "${byte_to_write}" | \
+    dd of="${certfileout}" bs=1 count=1 seek=$((offset+2+sigoffset)) conv=notrunc status=none
+  #dd if=${certfile} bs=1 count=1 skip=$((offset+2+sigoffset)) status=none | od -An -tx1
+  #sha1sum $certfilein $certfileout
 }
 
 main() {
-  local certfile id rc
+  local certfile id rc reason
 
   keyctl newring test @u 1>/dev/null
 
@@ -92,16 +118,19 @@ main() {
         exp=0
         # Every once in a while we inject a fault into the
         # certificate's key or signature
-        case $((RANDOM & 255)) in
-        255)
+        reason=""
+        case $((RANDOM & 3)) in
+        0)
           inject_fault_cert_key "${certfile}" "${certfile}.bad"
           certfile="${certfile}.bad"
           exp=1
+          reason="bad key"
         ;;
-        254)
+        1)
           inject_fault_cert_signature "${certfile}" "${certfile}.bad"
           certfile="${certfile}.bad"
           exp=1
+          reason="bad signature"
         ;;
         esac
 
@@ -110,14 +139,14 @@ main() {
         if [ $rc -ne $exp ]; then
           case "$exp" in
           0) echo "Error: Could not load valid certificate!";;
-          1) echo "Error: Succeeded to load invalid certificate!";;
+          1) echo "Error: Succeeded to load invalid certificate! ($reason)";;
           esac
           echo "key: $key"
           exit 1
         else
           case "$rc" in
           0) printf "Good: key: %7s  keyid: %-10s" "$key" "$id";;
-          *) printf "Good: key: %7s  keyid: %-10s -- bad certificate was rejected\n" "$key" "$id";;
+          *) printf "Good: key: %7s  keyid: %-10s -- bad certificate was rejected ($reason)\n" "$key" "$id";;
           esac
         fi
         if [ -n "${id}" ]; then
