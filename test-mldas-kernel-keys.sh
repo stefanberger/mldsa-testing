@@ -1,15 +1,41 @@
 #!/usr/bin/env bash
 
-# shellcheck disable=SC2059
+# shellcheck disable=SC2059,SC2043
 
 # Test loading of self-signed x509 certificates holding ML-DSA keys.
+
+# Flip a random bit at given byte offset in the given file
+bit_flip_in_file()
+{
+  local filename="$1"
+  local fileoffset="$2"
+
+  local byte newbyte byte_to_write
+
+  # current byte at this offset
+  byte="0x$(dd if="${filename}" bs=1 count=1 skip=$((fileoffset)) status=none |
+            od -An -tx1 |
+            cut -d" " -f2- |
+            tr -d ' ')"
+  #echo "fileoffset=$((fileoffset)) byte=$((byte))"
+  # flip a single random bit in this byte
+  newbyte=$((byte ^ (1 << (RANDOM & 7))))
+  byte_to_write="\x$(printf "%02x" ${newbyte})"
+  #echo "byte=$((byte)) newbyte=$((newbyte)) ${byte_to_write}"
+  #printf "${byte_to_write}" | od -An -tx1
+
+  # write this byte back into the file
+  echo -en "${byte_to_write}" | \
+    dd of="${filename}" bs=1 count=1 seek=$((fileoffset)) conv=notrunc status=none
+  #dd if=${certfile} bs=1 count=1 skip=$((fileoffset)) status=none | od -An -tx1
+}
 
 # Inject a fault into the certificate's key
 inject_fault_cert_key() {
   local certfilein="$1"
   local certfileout="$2"
 
-  local line offset keysize keyoffset byte newbyte byte_to_write
+  local line offset keysize keyoffset
 
   cp -f "${certfilein}" "${certfileout}"
 
@@ -27,23 +53,9 @@ inject_fault_cert_key() {
 
   # offset within key
   keyoffset=$((RANDOM % keysize))
-  # current byte at this offset
-  byte="0x$(dd if="${certfilein}" bs=1 count=1 skip=$((offset+2+keyoffset)) status=none |
-            od -An -tx1 |
-            cut -d" " -f2- |
-            tr -d ' ')"
-  #echo "keysize=$((keysize)) keyoffset=$((keyoffset)) byte=$((byte))"
-  # flip a single random bit in this byte
-  newbyte=$((byte ^ (1 << (RANDOM & 7))))
-  byte_to_write="\x$(printf "%02x" ${newbyte})"
-  #echo "byte=$((byte)) newbyte=$((newbyte)) ${byte_to_write}"
-  #printf "${byte_to_write}" | od -An -tx1
 
-  # write this byte back into the signature
-  echo -en "${byte_to_write}" | \
-    dd of="${certfileout}" bs=1 count=1 seek=$((offset+2+keyoffset)) conv=notrunc status=none
-  #dd if=${certfile} bs=1 count=1 skip=$((offset+2+sigoffset)) status=none | od -An -tx1
-  #sha1sum $certfilein $certfileout
+  bit_flip_in_file "${certfileout}" "$((offset+2+keyoffset))"
+  #sha1sum "${certfilein}" "${certfileout}"
 }
 
 # Inject a fault into the certificate's signature
@@ -51,7 +63,7 @@ inject_fault_cert_signature() {
   local certfilein="$1"
   local certfileout="$2"
 
-  local line offset sigsize sigoffset byte newbyte byte_to_write
+  local line offset sigsize sigoffset
 
   cp -f "${certfilein}" "${certfileout}"
 
@@ -68,23 +80,8 @@ inject_fault_cert_signature() {
                tr -d ' ')"
   # offset within signature
   sigoffset=$((RANDOM % sigsize))
-  # current byte at this offset
-  byte="0x$(dd if="${certfilein}" bs=1 count=1 skip=$((offset+2+sigoffset)) status=none |
-            od -An -tx1 |
-            cut -d" " -f2- |
-            tr -d ' ')"
-  #echo "sigsize=$((sigsize)) sigoffset=$((sigoffset)) byte=$((byte))"
-  # flip a single random bit in this byte
-  newbyte=$((byte ^ (1 << (RANDOM & 7))))
-  byte_to_write="\x$(printf "%02x" ${newbyte})"
-  #echo "byte=$((byte)) newbyte=$((newbyte)) ${byte_to_write}"
-  #printf "${byte_to_write}" | od -An -tx1
 
-  # write this byte back into the signature
-  echo -en "${byte_to_write}" | \
-    dd of="${certfileout}" bs=1 count=1 seek=$((offset+2+sigoffset)) conv=notrunc status=none
-  #dd if=${certfile} bs=1 count=1 skip=$((offset+2+sigoffset)) status=none | od -An -tx1
-  #sha1sum $certfilein $certfileout
+  bit_flip_in_file "${certfileout}" "$((offset+2+sigoffset))"
 }
 
 main() {
@@ -158,7 +155,7 @@ main() {
           # Sign the pre-hash; OpenSSL must be using domain separator 0x00, 0x00 (!)
           openssl pkeyutl -sign -inkey key.pem -in raw-in.hash -out sig.bin
           # This also works because the kernel uses domain separator 0x00, 0x00
-          if ! keyctl pkey_verify "${id}" 0 /dev/null sig.bin msg=$(base64 -w0 raw-in.hash); then
+          if ! keyctl pkey_verify "${id}" 0 /dev/null sig.bin "msg=$(base64 -w0 raw-in.hash)"; then
             printf "\n\nSignature verification failed\n"
             exit 1
           fi
@@ -175,7 +172,7 @@ main() {
             byte2=$(printf "%02x" $((RANDOM % 255)))
             printf "\x${byte1}\x${byte2}" |
               dd of=sig.bin.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
-            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin.bad msg=$(base64 -w0 raw-in.hash) &>/dev/null; then
+            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin.bad "msg=$(base64 -w0 raw-in.hash)" &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
                      -verify \
@@ -195,7 +192,7 @@ main() {
             # Generate a bad hash by injecting 2 random bytes into the file at some offset
             printf "\x${byte1}\x${byte2}" |
               dd of=raw-in.hash.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
-            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin msg=$(base64 -w0 raw-in.hash.bad) &>/dev/null; then
+            if keyctl pkey_verify "${id}" 0 /dev/null sig.bin "msg=$(base64 -w0 raw-in.hash.bad)" &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
                      -verify \
