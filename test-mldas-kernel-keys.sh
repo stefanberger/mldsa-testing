@@ -147,14 +147,14 @@ main() {
           esac
         fi
         if [ -n "${id}" ]; then
-          local sigsz off byte1 byte2
+          local sigsz off
 
           echo "test" >> raw-in
           # pre-hash
           openssl dgst -shake256 -xoflen=32 -binary raw-in > raw-in.hash
-          # Sign the pre-hash; OpenSSL must be using domain separator 0x00, 0x00 (!)
+          # Sign the pre-hash; OpenSSL must be using domain separator 0x00 followed by 0x00 (pure mode, no ctx)
           openssl pkeyutl -sign -inkey key.pem -in raw-in.hash -out sig.bin
-          # This also works because the kernel uses domain separator 0x00, 0x00
+          # This also works because the kernel uses domain separator 0x00 followed by 0x00 (pure mode, no ctx)
           if ! keyctl pkey_verify "${id}" 0 /dev/null sig.bin "msg=$(base64 -w0 raw-in.hash)"; then
             printf "\n\nSignature verification failed\n"
             exit 1
@@ -166,12 +166,10 @@ main() {
           for _ in $(seq 0 19); do
             cp sig.bin sig.bin.bad
 
-            off=$((RANDOM % (sigsz-1)))
-            # Generate a bad signature by injecting 2 random bytes into the file at some offset
-            byte1=$(printf "%02x" $((RANDOM % 255)))
-            byte2=$(printf "%02x" $((RANDOM % 255)))
-            printf "\x${byte1}\x${byte2}" |
-              dd of=sig.bin.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
+            off=$((RANDOM % sigsz))
+            # Generate a bad signature by flipping a bit at given offset
+            bit_flip_in_file sig.bin.bad "${off}"
+
             if keyctl pkey_verify "${id}" 0 /dev/null sig.bin.bad "msg=$(base64 -w0 raw-in.hash)" &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
@@ -184,14 +182,13 @@ main() {
               fi
             fi
 
-
             # test with good signature and bad hash
             cp raw-in.hash raw-in.hash.bad
-            off=$((RANDOM % (hashsz-1)))
+            off=$((RANDOM % hashsz))
 
-            # Generate a bad hash by injecting 2 random bytes into the file at some offset
-            printf "\x${byte1}\x${byte2}" |
-              dd of=raw-in.hash.bad bs=1 count=2 seek=$((off)) conv=notrunc status=none
+            # Generate a bad hash by flipping a bit at given offset
+            bit_flip_in_file raw-in.hash.bad "${off}"
+
             if keyctl pkey_verify "${id}" 0 /dev/null sig.bin "msg=$(base64 -w0 raw-in.hash.bad)" &>/dev/null; then
               # Accidentally verified - Must also pass with openssl
               if ! openssl pkeyutl \
